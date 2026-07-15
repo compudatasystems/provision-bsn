@@ -1634,7 +1634,17 @@ try {
 
         if ($script:catchPhishFound) {
             Write-Host ''
-            Write-Wrapped 'Catch Phish already looks deployed here — nothing to do. (This cannot be confirmed from PowerShell; the admin-center link above is the only authority.)' '  ' 'Green'
+            Write-Wrapped 'The Catch Phish Outlook add-in appears to be deployed here — so there is probably nothing to do. (PowerShell cannot confirm that; the admin-center link above is the only authority.)' '  ' 'Green'
+            # Offer the steps rather than deciding for them: a trace only proves the app was
+            # consented to, and the operator may well be here to re-deploy, fix the audience, or
+            # walk someone else through it. Default Y, because running -CatchPhishOnly (rather than
+            # -CatchPhishOnly -Verify) says they came here intending to deploy.
+            if (-not $NonInteractive -and -not $Verify) {
+                Write-Host ''
+                if ((Read-Host '  Display the manual deployment instructions anyway? (Y/n)') -notmatch '^\s*n(o)?\s*$') {
+                    Invoke-CatchPhishStep
+                }
+            }
         } elseif (-not $Verify) {
             Invoke-CatchPhishStep
             Write-Host ''
