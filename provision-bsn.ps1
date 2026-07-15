@@ -239,16 +239,21 @@ function Invoke-ManualStep {
         [string]$Portal = 'PII Protect portal',
         [System.Collections.Specialized.OrderedDictionary]$Links,
         [string[]]$Notes,
+        # Breadcrumb from the URL to the screen the steps act on, rendered on the Open line:
+        #   Open: https://portal.pii-protect.com > User Management > Single Sign On
+        # Getting there is context; the numbered steps are then only things the operator DOES.
+        [string]$Path,
         # This step can legitimately be left for another day, so the prompt should say so rather than
         # implying the run is blocked on it.
         [switch]$CanDefer
     )
     Write-Section "MANUAL ($Portal): $Title"
-    if ($Url) { Write-Host "  Open: $Url" -ForegroundColor Cyan }
+    if ($Url) { Write-Host "  Open: $Url$(if ($Path) { " > $Path" })" -ForegroundColor Cyan }
     if ($Links) {
         # Pad the labels so the URLs line up and stay easy to click/copy.
         $width = ($Links.Keys | Measure-Object -Property Length -Maximum).Maximum
         foreach ($k in $Links.Keys) { Write-Host ("  {0}  {1}" -f "$($k):".PadRight($width + 1), $Links[$k]) -ForegroundColor Cyan }
+        if ($Path) { Write-Host "  Then: $Path" -ForegroundColor Cyan }
     }
     # Same convention as -Notes: a caller-indented line is an aside on the step above, not a step of
     # its own, so it must not take a number — the numbers should match the source article's steps.
@@ -830,9 +835,9 @@ function Invoke-CatchPhishStep {
             'Integrated apps' = $IntegratedAppsUrl
             'Catch Phish'     = $CatchPhishMarketUrl
         }) `
+        -Path 'sign in as a Global Admin of the CLIENT tenant > Settings > Integrated apps' `
         -Steps @(
-            'Log in to the Microsoft 365 admin center as a Global Admin of the CLIENT tenant.',
-            'Settings > Integrated apps, then click "Get apps".',
+            'Click "Get apps".',
             '   (NOT the "Add-ins" link on that page — a different, older surface.)',
             'Search for "Catch Phish" and click "Get it now".',
             "   (Confirm it is the Breach Secure Now listing — AssetId $CatchPhishAssetId.)",
@@ -1654,9 +1659,9 @@ try {
     else { Write-Host "`n(Anti-spam allowed senders skipped by -SkipAllowedSenders.)" -ForegroundColor DarkGray }
 
     # 3. Manual: add the client as a tenant in the PII Protect portal.
-    Invoke-ManualStep -Title 'Add the client tenant' -Url 'https://portal.pii-protect.com' -Steps @(
-        'Log in as a Partner Administrator.',
-        'Manage Clients > "+ New Client".',
+    Invoke-ManualStep -Title 'Add the client tenant' -Url 'https://portal.pii-protect.com' `
+        -Path 'log in as a Partner Administrator > Manage Clients' -Steps @(
+        'Click "+ New Client".',
         "Business name: $ClientName (match your own client records exactly).",
         'Pick the closest Industry vertical, then Create.',
         'Open the new client > User Management tab.',
@@ -1664,8 +1669,8 @@ try {
     )
 
     # 4. Manual: enable Directory Sync (Azure AD) — portal-driven Global Admin consent.
-    Invoke-ManualStep -Title 'Enable Directory Sync (Azure AD)' -Url 'https://portal.pii-protect.com' -Steps @(
-        'Client > User Management > "Directory Sync".',
+    Invoke-ManualStep -Title 'Enable Directory Sync (Azure AD)' -Url 'https://portal.pii-protect.com' `
+        -Path 'the client > User Management > Directory Sync' -Steps @(
         'Choose Your Sync Type > "Azure Active Directory".',
         'Click Enable. Portal Logon: select "Email".',
         'Click "Authorize Directory Access" and consent with a Global Admin of the client tenant.',
@@ -1676,8 +1681,8 @@ try {
     if (-not $SkipSso) { Invoke-Phase 'Single Sign-On app' { Invoke-SsoPhase } }
 
     # 6. Manual: Direct Delivery / phishing whitelisting — portal-driven consent.
-    Invoke-ManualStep -Title 'Enable Direct Delivery (phishing)' -Url 'https://portal.pii-protect.com' -Steps @(
-        'Client > Phishing tab > Whitelisting.',
+    Invoke-ManualStep -Title 'Enable Direct Delivery (phishing)' -Url 'https://portal.pii-protect.com' `
+        -Path 'the client > Phishing > Whitelisting' -Steps @(
         'Click Enable; authenticate with a Global Admin of the client tenant.',
         'Review permissions > Accept.',
         'If it does not turn green, re-check later; if you disable/re-enable you may need to',
