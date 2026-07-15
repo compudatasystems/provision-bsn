@@ -243,7 +243,7 @@ Catch Phish is often deployed **days or weeks after** the initial onboarding, so
 own — no `-ClientName`, no other phases:
 
 ```powershell
-# That later visit: guided walk-through, then check the result.
+# That later visit: checks first, and only walks you through it if it's actually missing.
 ./provision-bsn.ps1 -CatchPhishOnly
 
 # Just check whether it's deployed — no prompts, read-only.

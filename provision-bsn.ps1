@@ -1384,6 +1384,11 @@ function Format-CreatedDate($value) {
 }
 
 function Test-BsnCatchPhish {
+    # Callers read this rather than a return value — the function writes plenty of output, and any
+    # stray pipeline emission would quietly corrupt a [bool] return. Reset FIRST, above every early
+    # return: a skipped check must not leave an earlier run's $true standing, or a caller would act
+    # on a verdict this pass never reached.
+    $script:catchPhishFound = $false
     if ($SkipCatchPhish) { Write-Check WARN 'Catch Phish add-in' 'skipped (-SkipCatchPhish)'; return }
 
     $sawIt = $false
@@ -1465,6 +1470,7 @@ function Test-BsnCatchPhish {
     # the add-in each had the Entra app, and the one without it (confirmed empty in both
     # admin-center lists) had neither. If Exchange couldn't be reached, only half the ground is
     # covered, so stay hedged.
+    $script:catchPhishFound = $sawIt
     if ($sawIt) {
         Write-Host '         Neither signal reports the audience, and consent is not proof of deployment —' -ForegroundColor DarkGray
         Write-Host "         confirm it is listed and assigned: $IntegratedAppsUrl" -ForegroundColor DarkGray
@@ -1620,9 +1626,20 @@ try {
     # -CatchPhishOnly: the add-in is usually deployed days or weeks after the onboarding visit, so
     # it runs on its own — guided step, then the check. With -Verify, just the check.
     if ($CatchPhishOnly) {
-        if (-not $Verify) { Invoke-CatchPhishStep }
+        # Check BEFORE showing the walkthrough. Most of the time this mode is run to find out
+        # whether a client still needs Catch Phish; making the operator read a 30-line deployment
+        # guide for something already deployed is noise, and buries the answer they came for.
         Invoke-Phase 'Catch Phish' { Test-BsnCatchPhish }
         if ($script:phaseErrors.Count) { Write-Warning 'The Catch Phish check hit a problem.' }
+
+        if ($script:catchPhishFound) {
+            Write-Host ''
+            Write-Wrapped 'Catch Phish already looks deployed here — nothing to do. (This cannot be confirmed from PowerShell; the admin-center link above is the only authority.)' '  ' 'Green'
+        } elseif (-not $Verify) {
+            Invoke-CatchPhishStep
+            Write-Host ''
+            Write-Wrapped 'Once deployed, re-run  ./provision-bsn.ps1 -CatchPhishOnly -Verify  to confirm it landed.' '  ' 'Cyan'
+        }
         Write-Host ''
         return
     }
