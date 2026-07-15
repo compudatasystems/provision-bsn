@@ -238,7 +238,10 @@ function Invoke-ManualStep {
         [string[]]$Steps,
         [string]$Portal = 'PII Protect portal',
         [System.Collections.Specialized.OrderedDictionary]$Links,
-        [string[]]$Notes
+        [string[]]$Notes,
+        # This step can legitimately be left for another day, so the prompt should say so rather than
+        # implying the run is blocked on it.
+        [switch]$CanDefer
     )
     Write-Section "MANUAL ($Portal): $Title"
     if ($Url) { Write-Host "  Open: $Url" -ForegroundColor Cyan }
@@ -259,8 +262,14 @@ function Invoke-ManualStep {
         if ($n -match '^\s') { Write-Host "    $($n.TrimStart())" -ForegroundColor Yellow }
         else                 { Write-Host "  ! $n" -ForegroundColor Yellow }
     }
-    if ($NonInteractive) {
+    # -WhatIf previews; it must not walk the operator through doing real work in a client's portal
+    # and then ask them to confirm they did it. Show the step, ask for nothing.
+    if ($WhatIfPreference) {
+        Write-Host '  (-WhatIf: preview only — this step is not being done now.)' -ForegroundColor Yellow
+    } elseif ($NonInteractive) {
         Write-Host '  (-NonInteractive: do this manually later.)' -ForegroundColor Yellow
+    } elseif ($CanDefer) {
+        [void](Read-Host "`n  Press Enter when this is done — or just press Enter to skip it for now")
     } else {
         [void](Read-Host "`n  Press Enter when this step is complete")
     }
@@ -756,7 +765,9 @@ function Invoke-RenewSsoCertPhase {
     Write-Wrapped 'HEADS UP: single sign-on for this client will STOP working the moment the new certificate takes over, and stay broken until you paste the metadata URL below back into the BSN portal. Do this when you can finish the portal step straight away — not at 5pm on a Friday.' '  ' 'Yellow'
     Write-Host ''
 
-    if (-not $NonInteractive) {
+    # Don't ask under -WhatIf: ShouldProcess below already declines, so the y/N would be asking the
+    # operator to authorise something that was never going to happen.
+    if (-not $NonInteractive -and -not $WhatIfPreference) {
         if ((Read-Host "  Renew the signing certificate for '$($app.displayName)'? (y/N)") -notmatch '^\s*(y|yes)\s*$') {
             Write-Host '  Skipped — nothing changed.' -ForegroundColor DarkGray
             return
@@ -805,7 +816,7 @@ function Invoke-RenewSsoCertPhase {
 # (O365CentralizedAddInDeployment) is Windows-only and documented as Basic-auth/no-MFA, which
 # mandatory admin MFA rules out. The integrated apps portal is Microsoft's recommended path anyway.
 function Invoke-CatchPhishStep {
-    Invoke-ManualStep -Portal 'Microsoft 365 admin center' -Title 'Deploy the Catch Phish Outlook add-in' `
+    Invoke-ManualStep -Portal 'Microsoft 365 admin center' -Title 'Deploy the Catch Phish Outlook add-in' -CanDefer `
         -Links ([ordered]@{
             'Integrated apps' = $IntegratedAppsUrl
             'Catch Phish'     = $CatchPhishMarketUrl
@@ -833,6 +844,9 @@ function Invoke-CatchPhishStep {
             '  Catch Phish is a report-phishing button for all staff. Narrower scoping needs a',
             '  mail-enabled group or distribution list (top-level only; nested groups are NOT',
             '  assigned).',
+            'THIS CAN WAIT. Nothing else here depends on it, and clients commonly get Catch Phish',
+            '  weeks or months after the rest of the onboarding. Skip it now and come back any time',
+            '  with:  ./provision-bsn.ps1 -CatchPhishOnly',
             'GCC High / GCC Low tenants: BSN publishes a SEPARATE article — these steps do not apply.',
             'BSN notes it can take up to 72 hours for the add-in to appear in Outlook. -Verify can',
             '  confirm the deployment well before that, but not instantly.'
@@ -944,7 +958,7 @@ function Test-BsnGroups {
             # (tenant HAS P1) vs. genuinely the best it can do (no P1).
             $p1 = Test-EntraP1
             if ($p1 -eq $true) {
-                Write-Check WARN 'Group BSN-Employees' 'assigned, but this tenant HAS Entra ID P1 — it could auto-enrol via dynamic membership. Re-run without -NoDynamicEmployees to convert (conversion drops any manually-added members).' 'New staff will NOT be enrolled in training automatically — someone has to add each person by hand. This tenant is licensed for automatic enrolment, so that is avoidable.'
+                Write-Check WARN 'Group BSN-Employees' 'assigned, but this tenant HAS Entra ID P1 — it could auto-enrol via dynamic membership. A normal provisioning run converts it (conversion drops any manually-added members).' 'New staff will NOT be enrolled in training automatically — someone has to add each person by hand. This tenant is licensed for automatic enrolment, so that is avoidable.'
             } elseif ($p1 -eq $false) {
                 Write-Check OK 'Group BSN-Employees' 'assigned (Entra ID P1 not present, so dynamic auto-enrol is unavailable; add users by hand)'
             } else {
@@ -1678,7 +1692,9 @@ try {
     }
     Write-Host 'Verify in the portal: tenant added, Directory Sync "Verified", SSO Connected, Direct Delivery green.' -ForegroundColor Cyan
     if (-not $SkipCatchPhish) {
-        Write-Host 'Catch Phish is deployed by hand and can take 24-72h to reach ribbons — re-run -Verify later.' -ForegroundColor Cyan
+        Write-Host 'Catch Phish is deployed by hand. If you skipped it, that is fine — nothing else depends' -ForegroundColor Cyan
+        Write-Host 'on it. Come back any time with:  ./provision-bsn.ps1 -CatchPhishOnly' -ForegroundColor Cyan
+        Write-Host 'Once deployed it can take 24-72h to reach ribbons — re-run -Verify later to confirm.' -ForegroundColor Cyan
     }
 }
 finally {
