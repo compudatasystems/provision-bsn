@@ -603,13 +603,18 @@ function Set-UpnEmailClaim([string]$SpId) {
 
 function Invoke-SsoPhase {
     Write-Section 'Single Sign-On: PII-Protect SSO (non-gallery SAML enterprise app)'
-    Write-Host '  In the portal: User Management > Single Sign On > click "Microsoft".' -ForegroundColor Cyan
-    Write-Host '  A popup shows a Redirect URL and an Application ID URI. Leave it open.' -ForegroundColor Cyan
+    Write-Host '  In the portal: Manage Clients > the client > User Management > Single Sign-On,' -ForegroundColor Cyan
+    Write-Host '  then click the Microsoft logo. Leave that popup open — it shows the two values below,' -ForegroundColor Cyan
+    Write-Host '  and you paste a Metadata URL back into it at the end.' -ForegroundColor Cyan
+    Write-Host ''
 
+    # Ask in the order the portal shows them (Application ID URL first) — BSN's own article lists
+    # them that way too. Asking for the Redirect URL first makes the operator hunt up and down the
+    # popup for each prompt.
+    $appIdUri = Read-Required 'Paste the Application ID URL from the portal popup' $SsoAppIdUri
     $redirect = Read-Required 'Paste the Redirect URL from the portal popup' $SsoRedirectUri
-    $appIdUri = Read-Required 'Paste the Application ID URI from the portal popup' $SsoAppIdUri
     if (-not $redirect -or -not $appIdUri) {
-        Write-Warning 'Missing Redirect URL / Application ID URI; skipping SSO. Re-run with -SsoRedirectUri and -SsoAppIdUri, or interactively.'
+        Write-Warning 'Missing Application ID URL / Redirect URL; skipping SSO. Re-run with -SsoAppIdUri and -SsoRedirectUri, or interactively.'
         return
     }
 
@@ -691,8 +696,12 @@ function Invoke-SsoPhase {
     Write-Host ''
     Write-Host '  Back in the PII Protect portal SSO popup:' -ForegroundColor Cyan
     Write-Host "    Metadata URL: $fedMeta" -ForegroundColor White
-    Write-Host '    Paste it into the "Metadata URL" field and click Connect.' -ForegroundColor Cyan
-    Write-Host '    If the portal shows a "Skip Identity Provider Logout" toggle, set it per BSN guidance.' -ForegroundColor Cyan
+    Write-Host '    1. Paste it into the "Metadata URL" field.' -ForegroundColor Cyan
+    Write-Host '    2. Tick "Skip Identity Provider Logout" (recommended).' -ForegroundColor Cyan
+    Write-Host '       BSN calls this optional and we suggest it: with it ticked, signing out of BSN' -ForegroundColor DarkGray
+    Write-Host '       leaves users signed in to Microsoft 365. Without it, finishing a training module' -ForegroundColor DarkGray
+    Write-Host '       can sign them out of Microsoft 365 entirely, which staff will not expect.' -ForegroundColor DarkGray
+    Write-Host '    3. Click Connect.' -ForegroundColor Cyan
     if (-not $NonInteractive) { [void](Read-Host "`n  Press Enter once you've clicked Connect in the portal") }
     $script:ssoConfigured = $true
 }
