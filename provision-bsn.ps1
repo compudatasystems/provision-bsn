@@ -284,6 +284,10 @@ function Invoke-Phase([string]$name, [scriptblock]$action) {
 }
 
 $script:fixesApplied = @()
+# Did the SSO phase actually finish? The Done summary used to infer it from -SkipSso not being
+# passed, so a run that bailed out ("Missing Redirect URL... skipping SSO") still reported SSO as
+# automated. Report what happened, not what was asked for.
+$script:ssoConfigured = $false
 # Offer to remediate a gap the verification pass found. No-op unless -Fix. Interactive: prompt y/N;
 # -NonInteractive: apply automatically; -WhatIf: preview only (via ShouldProcess). $action performs
 # the write, so it runs only once the fix is approved; a failed fix warns and the pass continues.
@@ -377,6 +381,11 @@ function Ensure-BsnGroup {
                         groupTypes = @('DynamicMembership'); membershipRule = $Rule; membershipRuleProcessingState = 'On'
                     }
                     Write-Host "  converted '$Name' to dynamic membership." -ForegroundColor Green
+                    # Reflect the conversion in what we hand back. $g was read BEFORE the PATCH, so
+                    # without this the caller sees a stale 'assigned' shape and wrongly reports the
+                    # group still needs hand-enrolment.
+                    $g.groupTypes = @('DynamicMembership')
+                    $g.membershipRule = $Rule
                 }
             }
             return $g
@@ -458,17 +467,27 @@ function Invoke-GroupsPhase {
         Ensure-BsnGroup -Name "BSN-TAG-$tag" -Description "PII/PHI Protect Tag: $tag" | Out-Null
     }
 
-    # If BSN-Employees didn't end up dynamic (no P1, or forced assigned), tell the operator plainly
-    # what that means and how to enrol users by hand.
+    # If BSN-Employees didn't end up dynamic, say what that means and how to enrol by hand — but
+    # only when it's actually true. Under -WhatIf nothing was converted, so a preview that just
+    # showed the conversion must not then announce the group needs hand-enrolment. And name the real
+    # reason: telling an operator to buy P1 they already own is worse than saying nothing.
     $empDynamic = [bool]($emp -and (@($emp.groupTypes) -contains 'DynamicMembership'))
-    if (-not $empDynamic) {
+    if (-not $empDynamic -and -not ($useDynamic -and $WhatIfPreference)) {
         Write-Host ''
         Write-Host '  ACTION NEEDED — BSN-Employees is a standard (assigned) group:' -ForegroundColor Yellow
         Write-Host '    Employees are NOT enrolled automatically. Add them by hand:'
         Write-Host '      1. Go to https://entra.microsoft.com  >  Groups  >  All groups  >  BSN-Employees'
         Write-Host '      2. Members  >  + Add members  >  select each employee  >  Select'
-        Write-Host '    To switch to automatic enrolment later, add Microsoft Entra ID P1 licensing and'
-        Write-Host '    re-run this script — it will convert BSN-Employees to dynamic membership.'
+        if ($NoDynamicEmployees) {
+            Write-Host '    You passed -NoDynamicEmployees. Re-run without it to switch to automatic'
+            Write-Host '    enrolment (conversion drops any manually-added members).'
+        } elseif (-not $useDynamic) {
+            Write-Host '    To switch to automatic enrolment later, add Microsoft Entra ID P1 licensing and'
+            Write-Host '    re-run this script — it will convert BSN-Employees to dynamic membership.'
+        } else {
+            Write-Host '    Automatic enrolment was attempted but did not take effect — re-run with -Verify'
+            Write-Host '    to see the current state.'
+        }
     }
 }
 
@@ -578,8 +597,8 @@ function Invoke-SsoPhase {
     Write-Host '  In the portal: User Management > Single Sign On > click "Microsoft".' -ForegroundColor Cyan
     Write-Host '  A popup shows a Redirect URL and an Application ID URI. Leave it open.' -ForegroundColor Cyan
 
-    $redirect = Read-Required 'Paste the Redirect URL from the portal popup:' $SsoRedirectUri
-    $appIdUri = Read-Required 'Paste the Application ID URI from the portal popup:' $SsoAppIdUri
+    $redirect = Read-Required 'Paste the Redirect URL from the portal popup' $SsoRedirectUri
+    $appIdUri = Read-Required 'Paste the Application ID URI from the portal popup' $SsoAppIdUri
     if (-not $redirect -or -not $appIdUri) {
         Write-Warning 'Missing Redirect URL / Application ID URI; skipping SSO. Re-run with -SsoRedirectUri and -SsoAppIdUri, or interactively.'
         return
@@ -666,6 +685,7 @@ function Invoke-SsoPhase {
     Write-Host '    Paste it into the "Metadata URL" field and click Connect.' -ForegroundColor Cyan
     Write-Host '    If the portal shows a "Skip Identity Provider Logout" toggle, set it per BSN guidance.' -ForegroundColor Cyan
     if (-not $NonInteractive) { [void](Read-Host "`n  Press Enter once you've clicked Connect in the portal") }
+    $script:ssoConfigured = $true
 }
 
 # --- Phase: renew the SSO SAML signing certificate (-RenewSsoCert) ----------------------
@@ -1637,8 +1657,8 @@ try {
         'Client > Phishing tab > Whitelisting.',
         'Click Enable; authenticate with a Global Admin of the client tenant.',
         'Review permissions > Accept.',
-        'If it does not turn green, re-check later; if you disable/re-enable you may need to re-grant',
-        'permissions under Entra: App registrations/Enterprise applications > DMD.'
+        'If it does not turn green, re-check later; if you disable/re-enable you may need to',
+        '   re-grant permissions under Entra: App registrations/Enterprise applications > DMD.'
     )
 
     # 7. Manual: Catch Phish Outlook add-in (Microsoft 365 admin center, not the BSN portal).
@@ -1649,7 +1669,10 @@ try {
     Invoke-Phase 'Verification' { Invoke-VerifyPhase }
 
     Write-Section 'Done'
-    Write-Host "Automated: Entra groups$(if (-not $NoDynamicEmployees) { ' (+ dynamic BSN-Employees where P1)' })$(if (-not $SkipAllowedSenders) { ', anti-spam allowed senders' })$(if (-not $SkipSso) { ', PII-Protect SSO (SAML enterprise app)' })." -ForegroundColor Green
+    Write-Host "Automated: Entra groups$(if (-not $NoDynamicEmployees) { ' (+ dynamic BSN-Employees where P1)' })$(if (-not $SkipAllowedSenders) { ', anti-spam allowed senders' })$(if ($script:ssoConfigured) { ', PII-Protect SSO (SAML enterprise app)' })." -ForegroundColor Green
+    if (-not $SkipSso -and -not $script:ssoConfigured) {
+        Write-Warning 'SSO was NOT configured (see above). Re-run with -SsoRedirectUri / -SsoAppIdUri, or interactively with the portal popup open.'
+    }
     if ($script:phaseErrors.Count) {
         Write-Warning "These automated phases hit problems and need a second look: $($script:phaseErrors -join ', ')."
     }
