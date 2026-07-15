@@ -1623,6 +1623,7 @@ try {
         if (-not $Verify) { Invoke-CatchPhishStep }
         Invoke-Phase 'Catch Phish' { Test-BsnCatchPhish }
         if ($script:phaseErrors.Count) { Write-Warning 'The Catch Phish check hit a problem.' }
+        Write-Host ''
         return
     }
 
@@ -1631,17 +1632,19 @@ try {
     if ($RenewSsoCert) {
         Invoke-Phase 'Renew SSO certificate' { Invoke-RenewSsoCertPhase }
         if ($script:phaseErrors.Count) { Write-Warning 'The certificate renewal hit a problem — re-run -Verify to see the current state.' }
+        Write-Host ''
         return
     }
 
     # -Fix: verify + remediate the safe/automatable gaps, no manual portal steps, then done.
     if ($Fix) {
         Invoke-Phase 'Fix' { Invoke-VerifyPhase }
+        if ($script:phaseErrors.Count) { Write-Warning "The fix pass hit a problem: $($script:phaseErrors -join ', ')." }
         Write-Section 'Done'
         Write-Host 'Applied the safe automatable fixes. Re-run with -Verify to confirm they stuck' -ForegroundColor Cyan
         Write-Host '(some writes replicate with a short delay). Cert / UPN / legacy-SSO migration are not' -ForegroundColor Cyan
         Write-Host 'auto-fixed — use a normal run (add -ReplaceSso to migrate a legacy SSO app).' -ForegroundColor Cyan
-        if ($script:phaseErrors.Count) { Write-Warning "The fix pass hit a problem: $($script:phaseErrors -join ', ')." }
+        Write-Host ''
         return
     }
 
@@ -1696,20 +1699,25 @@ try {
     # 8. Verify what left a footprint in the tenant.
     Invoke-Phase 'Verification' { Invoke-VerifyPhase }
 
-    Write-Section 'Done'
-    Write-Host "Automated: Entra groups$(if (-not $NoDynamicEmployees) { ' (+ dynamic BSN-Employees where P1)' })$(if (-not $SkipAllowedSenders) { ', anti-spam allowed senders' })$(if ($script:ssoConfigured) { ', PII-Protect SSO (SAML enterprise app)' })." -ForegroundColor Green
+    # Anything that went wrong belongs ABOVE the closing banner. 'Done' is the last word, not a
+    # container: a warning wedged between two summary lines reads like part of the summary and is
+    # easy to skim past, which is exactly the thing you must not miss.
     if (-not $SkipSso -and -not $script:ssoConfigured) {
-        Write-Warning 'SSO was NOT configured (see above). Re-run with -SsoRedirectUri / -SsoAppIdUri, or interactively with the portal popup open.'
+        Write-Warning 'SSO was NOT configured (see above). Re-run with -SsoAppIdUri / -SsoRedirectUri, or interactively with the portal popup open.'
     }
     if ($script:phaseErrors.Count) {
         Write-Warning "These automated phases hit problems and need a second look: $($script:phaseErrors -join ', ')."
     }
+
+    Write-Section 'Done'
+    Write-Host "Automated: Entra groups$(if (-not $NoDynamicEmployees) { ' (+ dynamic BSN-Employees where P1)' })$(if (-not $SkipAllowedSenders) { ', anti-spam allowed senders' })$(if ($script:ssoConfigured) { ', PII-Protect SSO (SAML enterprise app)' })." -ForegroundColor Green
     Write-Host 'Verify in the portal: tenant added, Directory Sync "Verified", SSO Connected, Direct Delivery green.' -ForegroundColor Cyan
     if (-not $SkipCatchPhish) {
         Write-Host 'Catch Phish is deployed by hand. If you skipped it, that is fine — nothing else depends' -ForegroundColor Cyan
         Write-Host 'on it. Come back any time with:  ./provision-bsn.ps1 -CatchPhishOnly' -ForegroundColor Cyan
         Write-Host 'Once deployed it can take 24-72h to reach ribbons — re-run -Verify later to confirm.' -ForegroundColor Cyan
     }
+    Write-Host ''
 }
 finally {
     Disconnect-MgGraph | Out-Null
