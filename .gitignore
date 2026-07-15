@@ -1,0 +1,6 @@
+# Vendor docs are exported fresh when needed, never committed — they stale and muddy the waters.
+*.pdf
+
+# Local, tool-specific agent instructions. The conventions live in AGENTS.md (vendor-neutral);
+# CLAUDE.md is just a local `@AGENTS.md` pointer for Claude Code and is not shared.
+CLAUDE.md
