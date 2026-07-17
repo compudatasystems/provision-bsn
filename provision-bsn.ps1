@@ -896,6 +896,23 @@ function Get-GroupMemberCount([string]$id) {
     } catch { return $null }
 }
 
+# The first page of a group's actual members, so verify can show WHO is in it, not just how many.
+# A count says "12"; a list says whether those 12 are the right people. Capped at $Top so a big group
+# doesn't flood the console — callers pair this with the count to print "... and N more". Members can
+# be users, nested groups, devices or service principals, so each returns a display string plus its
+# kind. $null on failure, so the caller just shows the count alone.
+function Get-GroupMemberSample([string]$id, [int]$Top = 20) {
+    try {
+        $r = Graph-Get "/groups/$id/members?`$top=$Top&`$select=id,displayName,userPrincipalName"
+        return @($r.value | ForEach-Object {
+            $kind = ($_.'@odata.type' -replace '^#microsoft\.graph\.', '')
+            $who  = if ($_.userPrincipalName) { "$($_.displayName) <$($_.userPrincipalName)>" }
+                    else { $_.displayName }
+            [pscustomobject]@{ Display = $who; Kind = $kind }
+        })
+    } catch { return $null }
+}
+
 # A deep link straight to where you'd edit this group in the Entra admin center — the rule editor for
 # a dynamic group, the members list otherwise. Saves hunting through Groups > All groups > search >
 # click > left-nav every time.
@@ -929,6 +946,22 @@ function Write-GroupDetail($group, [switch]$Core) {
         Write-Check WARN "  $($group.displayName) membership" 'the group exists but has NO members' "Nobody is actually enrolled through $($group.displayName) — the group is there but empty, so it is doing nothing."
     } else {
         Write-Host "         members: $count" -ForegroundColor DarkGray
+        # Show WHO, not just how many — the count can't tell you the right people are in it. Capped;
+        # print "... and N more" when the group is bigger than the sample.
+        if ($count -gt 0) {
+            $sample = Get-GroupMemberSample $group.id
+            if ($null -eq $sample) {
+                Write-Host '           (could not list members)' -ForegroundColor DarkGray
+            } else {
+                foreach ($m in $sample) {
+                    $tag = if ($m.Kind -and $m.Kind -ne 'user') { " [$($m.Kind)]" }
+                    Write-Host "           - $($m.Display)$tag" -ForegroundColor DarkGray
+                }
+                if ($count -gt $sample.Count) {
+                    Write-Host "           ... and $($count - $sample.Count) more" -ForegroundColor DarkGray
+                }
+            }
+        }
     }
 
     if (-not $dynamic) { return }
@@ -968,11 +1001,13 @@ function Test-BsnGroups {
             Write-GroupDetail $emp -Core
         } else {
             # Assigned. Whether that's the best available depends on licensing — dynamic membership
-            # (auto-enrol) needs Entra ID P1/P2 — so say which case this is: a missed opportunity
-            # (tenant HAS P1) vs. genuinely the best it can do (no P1).
+            # (auto-enrol) needs Entra ID P1/P2 — so say which case this is: an available option
+            # (tenant HAS P1) vs. genuinely the best it can do (no P1). Having P1 but an assigned
+            # group is not a problem — some tenants deliberately curate membership by hand — so this
+            # is INFO, not WARN.
             $p1 = Test-EntraP1
             if ($p1 -eq $true) {
-                Write-Check WARN 'Group BSN-Employees' 'assigned, but this tenant HAS Entra ID P1 — it could auto-enrol via dynamic membership. A normal provisioning run converts it (conversion drops any manually-added members).' 'New staff will NOT be enrolled in training automatically — someone has to add each person by hand. This tenant is licensed for automatic enrolment, so that is avoidable.'
+                Write-Check INFO 'Group BSN-Employees' 'assigned; this tenant HAS Entra ID P1, so it could auto-enrol via dynamic membership instead. A normal provisioning run converts it (conversion drops any manually-added members).'
             } elseif ($p1 -eq $false) {
                 Write-Check OK 'Group BSN-Employees' 'assigned (Entra ID P1 not present, so dynamic auto-enrol is unavailable; add users by hand)'
             } else {
@@ -1022,10 +1057,12 @@ function Test-BsnGroups {
     # appears occasionally in both their docs and real tenants. Graph's displayName filter is
     # case-insensitive, so either casing is found; report the casing actually in the tenant rather
     # than the form we asked for, so drift stays visible instead of being silently normalised.
+    $seenTagIds = @()
     foreach ($tag in $TagGroup) {
         $name = "BSN-TAG-$tag"
         $tg = Find-Group $name
         if ($tg) {
+            $seenTagIds += $tg.id
             $actual = if ($tg.displayName -cne $name) { " — actually named '$($tg.displayName)'" }
             Write-Check OK "Group $name" "exists$(if (@($tg.groupTypes) -contains 'DynamicMembership') { '; dynamic' })$actual"
             Write-GroupDetail $tg
@@ -1034,6 +1071,23 @@ function Test-BsnGroups {
             Write-Check FAIL "Group $name" 'not found'
             Invoke-Fix "create $name" { Ensure-BsnGroup -Name $name -Description "PII/PHI Protect Tag: $tag" | Out-Null }
         }
+    }
+
+    # Surface any OTHER BSN-TAG-* groups already in the tenant that weren't asked for on this run.
+    # Verify is a picture of the tenant, so tag groups set up earlier (or under a different -TagGroup
+    # list) should show up rather than staying invisible until the exact tag is passed again. Missing
+    # is not a failure here — these were never requested — so they're INFO. Match the BSN-TAG- prefix
+    # in either casing; startswith is case-insensitive in Graph.
+    $discovered = @()
+    try {
+        $discovered = @((Graph-Get "/groups?`$filter=startswith(displayName,'BSN-TAG-')&`$select=id,displayName,groupTypes,membershipRule,membershipRuleProcessingState&`$top=999").value)
+    } catch {
+        Write-Check WARN 'Tag groups' "could not list BSN-TAG-* groups: $($_.Exception.Message)"
+    }
+    foreach ($tg in $discovered) {
+        if ($tg.id -in $seenTagIds) { continue }   # already reported as a requested tag above
+        Write-Check INFO "Group $($tg.displayName)" "exists (not on this run's -TagGroup list)$(if (@($tg.groupTypes) -contains 'DynamicMembership') { '; dynamic' })"
+        Write-GroupDetail $tg
     }
 }
 
